@@ -6,6 +6,7 @@ feature cmd "$HAPROXY_PROGRAM -cc 'version_atleast(2.8-dev0)'"
 
 feature ignore_unknown_macro
 
+# TEST - 1
 server s1 {
 	rxreq
 	txresp -hdr "Connection: close"
@@ -88,3 +89,63 @@ client c1 -connect ${h1_fe_sock} {
 	expect resp.http.bytes_varNA   == ""
 	expect resp.http.bytes_1_varNA   == ""
 } -run
+
+# TEST - 2
+# negative starting index causes startup failure
+haproxy h2 -conf {
+    defaults
+	mode http
+	timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+	timeout client  "${HAPROXY_TEST_TIMEOUT-5s}"
+	timeout server  "${HAPROXY_TEST_TIMEOUT-5s}"
+
+    frontend fe
+	bind "fd@${fe}"
+
+	http-response set-header bytes_minus1     "%[var(txn.input),bytes(-1)]"
+
+	default_backend be
+
+    backend be
+	server s1 ${s1_addr}:${s1_port}
+} -start -expectexit 1
+
+# TEST - 3
+# negative length causes startup failure
+haproxy h3 -conf {
+    defaults
+	mode http
+	timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+	timeout client  "${HAPROXY_TEST_TIMEOUT-5s}"
+	timeout server  "${HAPROXY_TEST_TIMEOUT-5s}"
+
+    frontend fe
+	bind "fd@${fe}"
+
+	http-response set-header bytes_minus1     "%[var(txn.input),bytes(0,-1)]"
+
+	default_backend be
+
+    backend be
+	server s1 ${s1_addr}:${s1_port}
+} -start -expectexit 1
+
+# TEST - 4
+# 0 length causes startup failure
+haproxy h4 -conf {
+    defaults
+	mode http
+	timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+	timeout client  "${HAPROXY_TEST_TIMEOUT-5s}"
+	timeout server  "${HAPROXY_TEST_TIMEOUT-5s}"
+
+    frontend fe
+	bind "fd@${fe}"
+
+	http-response set-header bytes_minus1     "%[var(txn.input),bytes(0,0)]"
+
+	default_backend be
+
+    backend be
+	server s1 ${s1_addr}:${s1_port}
+} -start -expectexit 1
