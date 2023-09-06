@@ -490,7 +490,7 @@ int compare_current_version(const char *version)
 	return 0;
 }
 
-static void display_version()
+void display_version()
 {
 	struct utsname utsname;
 
@@ -1957,6 +1957,15 @@ static void init(int argc, char **argv)
         wolfSSL_Init();
         wolfSSL_Debugging_ON();
 #endif
+
+#ifdef USE_OPENSSL_AWSLC
+        const char *version_str = OpenSSL_version(OPENSSL_VERSION);
+        if (strncmp(version_str, "AWS-LC", 6) != 0) {
+            ha_alert("HAPRoxy built with AWS-LC but running with %s.\n", version_str);
+		    exit(1);
+        }
+#endif
+
 #if (HA_OPENSSL_VERSION_NUMBER < 0x1010000fL)
 	/* Initialize the error strings of OpenSSL
 	 * It only needs to be done explicitly with older versions of the SSL
@@ -2300,6 +2309,9 @@ static void init(int argc, char **argv)
                 exit(1);
         }
 #endif
+
+	thread_detect_binding_discrepancies();
+	thread_detect_more_than_cpus();
 
 	/* Apply server states */
 	apply_server_state();
@@ -2793,16 +2805,9 @@ void deinit(void)
 		free_proxy(p0);
 	}/* end while(p) */
 
-	/* we don't need to free sink_proxies_list proxies since it is
-	 * already handled in sink_deinit()
+	/* we don't need to free sink_proxies_list nor cfg_log_forward proxies since
+	 * they are respectively cleaned up in sink_deinit() and deinit_log_forward()
 	 */
-	p = cfg_log_forward;
-	/* we need to manually clean cfg_log_forward proxy list */
-	while (p) {
-		p0 = p;
-		p = p->next;
-		free_proxy(p0);
-	}
 
 	/* destroy all referenced defaults proxies  */
 	proxy_destroy_all_unref_defaults();

@@ -2378,7 +2378,7 @@ struct task *process_stream(struct task *t, void *context, unsigned int state)
 
 	/* shutdown(write) pending */
 	if (unlikely((scb->flags & (SC_FL_SHUT_DONE|SC_FL_SHUT_WANTED)) == SC_FL_SHUT_WANTED &&
-		     channel_is_empty(req))) {
+		     (channel_is_empty(req) || (req->flags & CF_WRITE_TIMEOUT)))) {
 		if (scf->flags & SC_FL_ERROR)
 			scb->flags |= SC_FL_NOLINGER;
 		sc_shutdown(scb);
@@ -2502,7 +2502,7 @@ struct task *process_stream(struct task *t, void *context, unsigned int state)
 
 	/* shutdown(write) pending */
 	if (unlikely((scf->flags & (SC_FL_SHUT_DONE|SC_FL_SHUT_WANTED)) == SC_FL_SHUT_WANTED &&
-		     channel_is_empty(res))) {
+		     (channel_is_empty(res) || (res->flags & CF_WRITE_TIMEOUT)))) {
 		sc_shutdown(scf);
 	}
 
@@ -2861,7 +2861,8 @@ void stream_dump(struct buffer *buf, const struct stream *s, const char *pfx, ch
 		           (s->txn ? h1_msg_state_str(s->txn->req.msg_state): "-"), (s->txn ? s->txn->req.flags : 0),
 		           (s->txn ? h1_msg_state_str(s->txn->rsp.msg_state): "-"), (s->txn ? s->txn->rsp.flags : 0), eol,
 	              pfx, req->flags, req->analysers, res->flags, res->analysers, eol,
-		      pfx, scf, sc_state_str(scf->state), scf->flags, scb, sc_state_str(scb->state), scb->flags, eol,
+		      pfx, scf, scf ? sc_state_str(scf->state) : 0, scf ? scf->flags : 0,
+		      scb, scb ? sc_state_str(scb->state) : 0, scb ? scb->flags : 0, eol,
 	              pfx, acf, acf ? acf->st0   : 0, acb, acb ? acb->st0   : 0, eol,
 	              pfx, cof, cof ? cof->flags : 0, conn_get_mux_name(cof), cof?cof->ctx:0, conn_get_xprt_name(cof),
 		           cof ? cof->xprt_ctx : 0, conn_get_ctrl_name(cof), conn_fd(cof), eol,

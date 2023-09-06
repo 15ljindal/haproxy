@@ -734,6 +734,63 @@ int smp_log_range_cmp(const void *a, const void *b)
 	return 0;
 }
 
+/* resolves a single logsrv entry (it is expected to be called
+ * at postparsing stage)
+ *
+ * <logsrv> is parent logsrv used for implicit settings
+ *
+ * Returns err_code which defaults to ERR_NONE and can be set to a combination
+ * of ERR_WARN, ERR_ALERT, ERR_FATAL and ERR_ABORT in case of errors.
+ * <msg> could be set at any time (it will usually be set on error, but
+ * could also be set when no error occured to report a diag warning), thus is
+ * up to the caller to check it and to free it.
+ */
+int resolve_logsrv(struct logsrv *logsrv, char **msg)
+{
+	int err_code = ERR_NONE;
+
+	if (logsrv->type == LOG_TARGET_BUFFER)
+		err_code = sink_resolve_logsrv_buffer(logsrv, msg);
+	return err_code;
+}
+
+/* tries to duplicate <def> logsrv
+ *
+ * Returns the newly allocated and duplicated logsrv or NULL
+ * in case of error.
+ */
+struct logsrv *dup_logsrv(struct logsrv *def)
+{
+	struct logsrv *cpy = malloc(sizeof(*cpy));
+
+	/* copy everything that can be easily copied */
+	memcpy(cpy, def, sizeof(*cpy));
+
+	/* default values */
+	cpy->ring_name = NULL;
+	cpy->conf.file = NULL;
+	LIST_INIT(&cpy->list);
+	HA_SPIN_INIT(&cpy->lock);
+
+	/* special members */
+	if (def->ring_name) {
+		cpy->ring_name = strdup(def->ring_name);
+		if (!cpy->ring_name)
+			goto error;
+	}
+	if (def->conf.file) {
+		cpy->conf.file = strdup(def->conf.file);
+		if (!cpy->conf.file)
+			goto error;
+	}
+	cpy->ref = def;
+	return cpy;
+
+ error:
+	free_logsrv(cpy);
+	return NULL;
+}
+
 /* frees log server <logsrv> after freeing all of its allocated fields. The
  * server must not belong to a list anymore. Logsrv may be NULL, which is
  * silently ignored.
@@ -808,18 +865,20 @@ int parse_logsrv(char **args, struct list *logsrvs, int do_del, const char *file
 					goto skip_logsrv;
 			}
 
-			node = malloc(sizeof(*node));
+			/* duplicate logsrv from global */
+			node = dup_logsrv(logsrv);
 			if (!node) {
 				memprintf(err, "out of memory error");
 				goto error;
 			}
-			memcpy(node, logsrv, sizeof(struct logsrv));
-			node->ref = logsrv;
-			LIST_INIT(&node->list);
-			LIST_APPEND(logsrvs, &node->list);
-			node->ring_name = logsrv->ring_name ? strdup(logsrv->ring_name) : NULL;
+
+			/* manually override some values */
+			ha_free(&node->conf.file);
 			node->conf.file = strdup(file);
 			node->conf.line = linenum;
+
+			/* add to list */
+			LIST_APPEND(logsrvs, &node->list);
 
 		  skip_logsrv:
 			continue;
@@ -1688,7 +1747,6 @@ static inline void __do_send_log(struct logsrv *logsrv, int nblogger, int level,
 		size_t maxlen = logsrv->maxlen;
 
 		msg = ist2(message, size);
-		msg = isttrim(msg, logsrv->maxlen);
 
 		/* make room for the final '\n' which may be forcefully inserted
 		 * by tcp forwarder applet (sink_forward_io_handler)
@@ -1701,7 +1759,6 @@ static inline void __do_send_log(struct logsrv *logsrv, int nblogger, int level,
 		struct ist msg;
 
 		msg = ist2(message, size);
-		msg = isttrim(msg, logsrv->maxlen);
 
 		sent = fd_write_frag_line(*plogfd, logsrv->maxlen, msg_header, nbelem, &msg, 1, 1);
 	}
@@ -1956,6 +2013,20 @@ void deinit_log_buffers()
 	free(logline_rfc5424);
 	logline           = NULL;
 	logline_rfc5424   = NULL;
+}
+
+/* Deinitialize log forwarder proxies used for syslog messages */
+void deinit_log_forward()
+{
+	struct proxy *p, *p0;
+
+	p = cfg_log_forward;
+	/* we need to manually clean cfg_log_forward proxy list */
+	while (p) {
+		p0 = p;
+		p = p->next;
+		free_proxy(p0);
+	}
 }
 
 /* Builds a log line in <dst> based on <list_format>, and stops before reaching
@@ -3966,12 +4037,72 @@ out:
 	return err_code;
 }
 
+/* function: post-resolve a single list of logsrvs
+ *
+ * Returns err_code which defaults to ERR_NONE and can be set to a combination
+ * of ERR_WARN, ERR_ALERT, ERR_FATAL and ERR_ABORT in case of errors.
+ */
+int postresolve_logsrv_list(struct list *logsrvs, const char *section, const char *section_name)
+{
+	int err_code = ERR_NONE;
+	struct logsrv *logsrv;
+
+	list_for_each_entry(logsrv, logsrvs, list) {
+		int cur_code;
+		char *msg = NULL;
+
+		cur_code = resolve_logsrv(logsrv, &msg);
+		if (msg) {
+			void (*e_func)(const char *fmt, ...) = NULL;
+
+			if (cur_code & ERR_ALERT)
+				e_func = ha_alert;
+			else if (cur_code & ERR_WARN)
+				e_func = ha_warning;
+			else
+				e_func = ha_diag_warning;
+			if (!section)
+				e_func("global log server declared in file %s at line '%d' %s.\n",
+				       logsrv->conf.file, logsrv->conf.line, msg);
+			else
+				e_func("log server declared in %s section '%s' in file '%s' at line %d %s.\n",
+				       section, section_name, logsrv->conf.file, logsrv->conf.line, msg);
+			ha_free(&msg);
+		}
+		err_code |= cur_code;
+	}
+	return err_code;
+}
+
+/* resolve default log directives at end of config. Returns 0 on success
+ * otherwise error flags.
+*/
+static int postresolve_logsrvs()
+{
+	struct proxy *px;
+	int err_code = ERR_NONE;
+
+	/* global log directives */
+	err_code |= postresolve_logsrv_list(&global.logsrvs, NULL, NULL);
+	/* proxy log directives */
+	for (px = proxies_list; px; px = px->next)
+		err_code |= postresolve_logsrv_list(&px->logsrvs, "proxy", px->id);
+	/* log-forward log directives */
+	for (px = cfg_log_forward; px; px = px->next)
+		err_code |= postresolve_logsrv_list(&px->logsrvs, "log-forward", px->id);
+
+	return err_code;
+}
+
 
 /* config parsers for this section */
 REGISTER_CONFIG_SECTION("log-forward", cfg_parse_log_forward, NULL);
+REGISTER_POST_CHECK(postresolve_logsrvs);
 
 REGISTER_PER_THREAD_ALLOC(init_log_buffers);
 REGISTER_PER_THREAD_FREE(deinit_log_buffers);
+
+REGISTER_POST_DEINIT(deinit_log_forward);
 
 /*
  * Local variables:

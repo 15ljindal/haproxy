@@ -138,7 +138,7 @@ static void applet_trace(enum trace_level level, uint64_t mask, const struct tra
 
 	chunk_appendf(&trace_buf, " - s=(%p,0x%08x,0x%x)", s, s->flags, s->conn_err_type);
 
-	chunk_appendf(&trace_buf, " sc=(%p,%d,0x%08x,0x%x) sco=(%p,%d,0x%08x,0x%x) sc.exp(r,w)=(%d,%d) sc.exp(r,w)=(%d,%d)",
+	chunk_appendf(&trace_buf, " sc=(%p,%d,0x%08x,0x%x) sco=(%p,%d,0x%08x,0x%x) sc.exp(r,w)=(%d,%d) sco.exp(r,w)=(%d,%d)",
 		      sc, sc->state, sc->flags, sc->sedesc->flags,
 		      sco, sco->state, sco->flags, sco->sedesc->flags,
 		      tick_isset(sc_ep_rcv_ex(sc)) ? TICKS_TO_MS(sc_ep_rcv_ex(sc) - now_ms) : TICK_ETERNITY,
@@ -465,10 +465,14 @@ struct task *task_run_applet(struct task *t, void *context, unsigned int state)
 	if (sc_ic(sc)->flags & CF_READ_EVENT)
 		sc_ep_report_read_activity(sc);
 
-	if (channel_is_empty(sc_oc(sc)))
+	if (sc_waiting_room(sc) && (sc->flags & SC_FL_ABRT_DONE)) {
+		sc_ep_set(sc, SE_FL_EOS|SE_FL_ERROR);
+	}
+	else if (channel_is_empty(sc_oc(sc)))
 		sc_ep_report_send_activity(sc);
-	else
+	else {
 		sc_ep_report_blocked_send(sc);
+	}
 
 	/* measure the call rate and check for anomalies when too high */
 	if (((b_size(sc_ib(sc)) && sc->flags & SC_FL_NEED_BUFF) || // asks for a buffer which is present
