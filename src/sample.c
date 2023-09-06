@@ -2708,15 +2708,10 @@ static int sample_conv_bytes(const struct arg *arg_p, struct sample *smp, void *
 	struct sample smp_arg0, smp_arg1;
 	long long start_idx, length;
 
-	// add printf statements in this function in various places for debugging
-	printf("sample_conv_bytes: arg_p[0].type=%d, arg_p[1].type=%d\n", arg_p[0].type, arg_p[1].type);
-
 	// determine the start_idx and length of the output
 	smp_set_owner(&smp_arg0, smp->px, smp->sess, smp->strm, smp->opt);
 	if (!sample_conv_var2smp_sint(&arg_p[0], &smp_arg0)) {
 		smp->data.u.str.data = 0;
-		// add debug printf
-		printf("sample_conv_bytes: smp_arg0 conversion failed\n");
 		return 0;
 	}
 	if (smp_arg0.data.u.sint < 0 || (smp_arg0.data.u.sint >= smp->data.u.str.data)) {
@@ -2742,11 +2737,6 @@ static int sample_conv_bytes(const struct arg *arg_p, struct sample *smp, void *
 	} else {
 		length = smp->data.u.str.data - start_idx;
 	}
-
-	// add debug printf
-	printf("sample_conv_bytes: start_idx=%lld, length=%lld\n", start_idx, length);
-	// flush printfs
-	fflush(stdout);	
 
 	// update the output using the start_idx and length
 	smp->data.u.str.area += start_idx;
