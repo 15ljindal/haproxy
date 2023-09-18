@@ -18044,10 +18044,12 @@ bool
 bytes(<offset>[,<length>])
   Extracts some bytes from an input binary sample. The result is a binary
   sample starting at an offset (in bytes) of the original sample and
-  optionally truncated at the given length. <offset> and <length> can be a numeric values
-  or variable names. The converter returns an empty sample if either <offset> or <length> is invalid.
-  Invalid <offset> means a negative value or a value >= length of the input sample.
-  Invalid <length> means a negative value or a value > length of the input sample.
+  optionally truncated at the given length. <offset> and <length> can be numeric
+  values or variable names. The converter returns an empty sample if either
+  <offset> or <length> is invalid.
+  Invalid <offset> means a negative value or a value >= length of the input
+  sample. Invalid <length> means a negative value or, in some cases, a value
+  bigger than the length of the input sample.
 
   Example:
       http-request set-var(txn.input) req.hdr(input) # let's say input is "012345"

@@ -2715,25 +2715,37 @@ static int sample_conv_bytes(const struct arg *arg_p, struct sample *smp, void *
 		return 0;
 	}
 	if (smp_arg0.data.u.sint < 0 || (smp_arg0.data.u.sint >= smp->data.u.str.data)) {
-		// empty output if the arg1 value is negative or >= the input length
+		// empty output if the arg0 value is negative or >= the input length
 		smp->data.u.str.data = 0;
 		return 0;
 	}
 	start_idx = smp_arg0.data.u.sint;
 
-	// length comes from arg2 if present, otherwise it's the remaining length
+	// length comes from arg1 if present, otherwise it's the remaining length
 	if (arg_p[1].type != ARGT_STOP) {
 		smp_set_owner(&smp_arg1, smp->px, smp->sess, smp->strm, smp->opt);
 		if (!sample_conv_var2smp_sint(&arg_p[1], &smp_arg1)) {
 			smp->data.u.str.data = 0;
 			return 0;
 		}
-		if (smp_arg1.data.u.sint < 0 || (smp_arg1.data.u.sint > (smp->data.u.str.data - start_idx))) {
-			// empty output if the arg2 value is negative or bigger than the remaining length
+		if (smp_arg1.data.u.sint < 0) {
+			// empty output if the arg1 value is negative
 			smp->data.u.str.data = 0;
 			return 0;
 		}
-		length = smp_arg1.data.u.sint;
+
+		if (smp_arg1.data.u.sint > (smp->data.u.str.data - start_idx)) {
+			// arg1 value is greater than the remaining length
+			if (smp->opt & SMP_OPT_FINAL) {
+				// truncate to remaining length
+				length = smp->data.u.str.data - start_idx;
+			} else {
+				smp->data.u.str.data = 0;
+				return 0;
+			}
+		} else {
+			length = smp_arg1.data.u.sint;
+		}
 	} else {
 		length = smp->data.u.str.data - start_idx;
 	}
@@ -3144,7 +3156,7 @@ static int check_operator(struct arg *args, struct sample_conv *conv,
 	long long int i;
 
 	/* Try to decode a variable. */
-	if (vars_check_arg(&args[0], err))
+	if (vars_check_arg(&args[0], NULL))
 		return 1;
 
 	/* Try to convert an integer */
@@ -4936,16 +4948,16 @@ static int sample_conv_bytes_check(struct arg *args, struct sample_conv *conv,
 	if (!check_operator(&args[0], conv, file, line, err)) {
 		return 0;
 	}
-    if (args[0].type != ARGT_VAR) {
-        if (args[0].type != ARGT_SINT || args[0].data.sint < 0) {
-            memprintf(err, "expects a non-negative integer");
-            return 0;
-        }
-    }
+	if (args[0].type != ARGT_VAR) {
+		if (args[0].type != ARGT_SINT || args[0].data.sint < 0) {
+			memprintf(err, "expects a non-negative integer");
+			return 0;
+		}
+	}
 	// arg1 is optional, must be > 0
 	if (args[1].type != ARGT_STOP) {
 		if (!check_operator(&args[1], conv, file, line, err)) {
-		return 0;
+			return 0;
 		}
 		if (args[1].type != ARGT_VAR) {
 			if (args[1].type != ARGT_SINT || args[1].data.sint <= 0) {

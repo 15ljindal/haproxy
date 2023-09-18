@@ -79,11 +79,14 @@ client c1 -connect ${h1_fe_sock} {
 	expect resp.http.bytes_5 == "5"
 	expect resp.http.bytes_6 == ""
 	expect resp.http.bytes_0_6 == "012345"
-	expect resp.http.bytes_0_7 == ""
+
+	# since specified length is > input length, response contains the input till the end
+	expect resp.http.bytes_0_7 == "012345"
+
 	expect resp.http.bytes_var0 == "012345"
 	expect resp.http.bytes_var1_var3 == "123"
 	expect resp.http.bytes_var99 == ""
-	expect resp.http.bytes_var0_var7 == ""
+	expect resp.http.bytes_var0_var7 == "012345"
 	expect resp.http.bytes_var1_3 == "123"
 	expect resp.http.bytes_1_var3 == "123"
 	expect resp.http.bytes_varminus1 == ""
@@ -93,8 +96,54 @@ client c1 -connect ${h1_fe_sock} {
 } -run
 
 # TEST - 2
-# negative starting index causes startup failure
+# test to verify special behavior when arg1 value is greater than sample length
+server s2 {
+	rxreq
+	txresp -hdr "Connection: close" -hdr "input: 012345"
+} -repeat 1 -start
+
 haproxy h2 -conf {
+	defaults
+		mode http
+		timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+		timeout client  "${HAPROXY_TEST_TIMEOUT-5s}"
+		timeout server  "${HAPROXY_TEST_TIMEOUT-5s}"
+
+	frontend fe
+		bind "fd@${fe}"
+
+		#### requests
+		http-request  set-var(txn.input) req.hdr(input)
+
+		http-response set-header txn_bytes_0_7    			"%[var(txn.input),bytes(0,7)]"
+		http-response set-header txn_bytes_0_7_concat		"%[var(txn.input),bytes(0,7),concat()]"
+
+		http-response set-header hdr_bytes_0_7    			"%[res.hdr(input),bytes(0,7)]"
+		http-response set-header hdr_bytes_0_7_concat	"%[res.hdr(input),bytes(0,7),concat()]"
+
+		default_backend be
+
+	backend be
+		server s2 ${s2_addr}:${s2_port}
+} -start
+
+client c2 -connect ${h2_fe_sock} {
+	txreq -url "/" \
+		-hdr "input: 012345"
+	rxresp
+	
+	# since "bytes" is the final operator, response would be truncated
+	expect resp.http.txn_bytes_0_7 == "012345"
+	expect resp.http.txn_bytes_0_7_concat == "012345"
+	expect resp.http.hdr_bytes_0_7 == "012345"
+	# since "bytes" is the non-final operator, response would be empty
+	expect resp.http.hdr_bytes_0_7_concat == ""
+
+} -run
+
+# TEST - 3
+# negative starting index causes startup failure
+haproxy h3 -conf {
 	defaults
 		mode http
 		timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
@@ -112,9 +161,9 @@ haproxy h2 -conf {
 		server s1 ${s1_addr}:${s1_port}
 } -start -expectexit 1
 
-# TEST - 3
+# TEST - 4
 # negative length causes startup failure
-haproxy h3 -conf {
+haproxy h4 -conf {
 	defaults
 		mode http
 		timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
@@ -132,9 +181,9 @@ haproxy h3 -conf {
 		server s1 ${s1_addr}:${s1_port}
 } -start -expectexit 1
 
-# TEST - 4
+# TEST - 5
 # 0 length causes startup failure
-haproxy h4 -conf {
+haproxy h5 -conf {
 	defaults
 		mode http
 		timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
